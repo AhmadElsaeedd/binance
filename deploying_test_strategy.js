@@ -4,61 +4,29 @@ const axios = require('axios');
 const moment = require('moment');
 
 const API_KEY = 'bd861864-d25a-40cf-8545-6d8f70353b68';
-const HISTORICAL_URL = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/historical';
-const LATEST_URL = 'https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest';
+const LATEST_URL = 'https://pro-api.coinmarketcap.com/v2/cryptocurrency/listings/latest';
 const HISTORICAL_QUOTES_URL = 'https://pro-api.coinmarketcap.com/v3/cryptocurrency/quotes/historical';
 
-// Function to fetch historical data
-async function fetchHistoricalData(date) {
-  try {
-    const response = await axios.get(HISTORICAL_URL, {
-      headers: {
-        'X-CMC_PRO_API_KEY': API_KEY,
-      },
-      params: {
-        date: date,
-        limit: 500,
-        convert: 'USD',
-      },
-    });
-    return response.data.data;
-  } catch (error) {
-    console.error('Error fetching historical data:', error);
-    return [];
-  }
-}
-
 // Function to fetch current data for a list of IDs using the Quotes Latest v2 endpoint
-async function fetchCurrentDataByIds(ids) {
+async function fetchCurrentData() {
   try {
     const response = await axios.get(LATEST_URL, {
       headers: {
         'X-CMC_PRO_API_KEY': API_KEY,
       },
       params: {
-        id: ids.join(','), // Pass IDs as a comma-separated string
         convert: 'USD',
+        limit: 500,
       },
     });
 
-    // Process and return the data as needed
-    const currentData = Object.values(response.data.data).map((token) => {
-      if (token.quote && token.quote.USD.price) {
-        return {
-          id: token.id,
-          symbol: token.symbol,
-          quote: token.quote.USD.price,
-        };
-      }
-      return null;
-    });
-
-    return currentData;
+    return response.data.data;
   } catch (error) {
     console.error('Error fetching current data by IDs:', error);
     return [];
   }
 }
+
 
 // Function to fetch historical quotes for a list of IDs
 async function fetchHistoricalQuotes(ids, timeStart, timeEnd, interval = '24h') {
@@ -97,7 +65,7 @@ function filterTokens(tokens) {
     symbol: token.symbol,
     name: token.name,
     id: token.id,
-    historicalPrice: token.quote.USD.price,
+    price: token.quote.USD.price,
   }));
 
   return tokenData;
@@ -105,9 +73,6 @@ function filterTokens(tokens) {
 
 // Function to simulate investment with stop-loss and take-profit
 async function simulateInvestmentWithStopLossAndTakeProfit(tokenData, stopLoss = -0.10, takeProfit = 0.70) {
-//   const sevenDaysAgo = moment().subtract(7, 'days').toISOString();
-//   const now = moment().toISOString();
-//   const historicalQuotes = await fetchHistoricalQuotes(tokenData.map((token) => token.id), sevenDaysAgo, now);
   const thirtyDaysAgo = moment().subtract(20, 'days').toISOString(); // Adjusted from 7 to 30 days
   const now = moment().toISOString();
   const historicalQuotes = await fetchHistoricalQuotes(tokenData.map((token) => token.id), thirtyDaysAgo, now);
@@ -125,14 +90,6 @@ async function simulateInvestmentWithStopLossAndTakeProfit(tokenData, stopLoss =
       const currentPrice = quotes[i].quote.USD.price;
       const priceChange = (currentPrice - previousPrice) / previousPrice;
 
-      //   if (priceChange <= stopLoss || priceChange >= takeProfit) {
-      //     console.log('I\'ve exited');
-      //     console.log('Price change is: ', priceChange);
-      //     exitTriggered = true;
-      //     const unitsBought = 100 / quotes[0].quote.USD.price;
-      //     investmentValue = unitsBought * currentPrice;
-      //     break; // Exit the investment
-      //   }
       if (priceChange >= takeProfit) {
         exitTriggered = true;
         exitTimestamp = quotes[i].timestamp; // Store the exit timestamp
@@ -149,18 +106,31 @@ async function simulateInvestmentWithStopLossAndTakeProfit(tokenData, stopLoss =
   return simulationResults;
 }
 
+async function buyTokens(tokenData) {
+  for (const token of tokenData) {
+    console.log('Buying token: ', token);
+    await csvWriter.writeRecords([{
+      timestamp: new Date().toISOString(),
+      action: 'BUY',
+      symbol: token.symbol,
+      price: token.price,
+      amount: 100 / token.price,
+    }]);
+    console.log(`Logged BUY for ${token.symbol}`);
+  }
+}
+
+
 // Main function to backtest the strategy
-async function backtestStrategy() {
-//   const sevenDaysAgo = moment().subtract(7, 'days').format('YYYY-MM-DD');
-//   const historicalData = await fetchHistoricalData(sevenDaysAgo);
-  const thirtyDaysAgo = moment().subtract(20, 'days').format('YYYY-MM-DD'); // Adjusted from 7 to 30 days
-  const historicalData = await fetchHistoricalData(thirtyDaysAgo);
-  const tokenData = filterTokens(historicalData);
+async function strategy() {
+  const currentData = await fetchCurrentData();
+  const tokenData = filterTokens(currentData);
   const tokenCount = tokenData.length;
 
-  const ids = tokenData.map((token) => token.id);
-  const currentData = await fetchCurrentDataByIds(ids);
-  const simulationResults = await simulateInvestmentWithStopLossAndTakeProfit(tokenData);
+  // ToDo: write a function that "buys" the tokens that are in tokenData
+  await buyTokens(tokenData);
+
+  //   const simulationResults = await simulateInvestmentWithStopLossAndTakeProfit(tokenData);
 
   let totalPortfolioValue = 0;
 
@@ -185,4 +155,16 @@ async function backtestStrategy() {
   console.log('Percentage gain or loss: ', percentageGainOrLoss);
 }
 
-backtestStrategy();
+const csvWriter = createCsvWriter({
+  path: 'trade_log.csv',
+  header: [
+    {id: 'timestamp', title: 'TIMESTAMP'},
+    {id: 'action', title: 'ACTION'},
+    {id: 'symbol', title: 'SYMBOL'},
+    {id: 'price', title: 'PRICE'},
+    {id: 'amount', title: 'AMOUNT'},
+    // Add more fields as necessary
+  ],
+});
+
+strategy();

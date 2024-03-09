@@ -89,78 +89,103 @@ function filterTokens(tokens) {
     const volume24h = token.quote.USD.volume_24h;
     const volumeMarketCapRatio = (volume24h / marketCap) * 100;
 
-    return marketCap < 1e9 && volumeMarketCapRatio > 15;
+    return marketCap < 1e9 && volumeMarketCapRatio > 10;
   });
 
   // Extract IDs and historical prices of the filtered tokens
   const tokenData = filteredTokens.map((token) => ({
-    symbol: token.symbol,
-    name: token.name,
     id: token.id,
     historicalPrice: token.quote.USD.price,
+    percent_change_24h: token.quote.USD.percent_change_24h,
   }));
 
   return tokenData;
 }
 
-// Function to simulate investment with stop-loss and take-profit
-async function simulateInvestmentWithStopLossAndTakeProfit(tokenData, stopLoss = -0.10, takeProfit = 0.70) {
-//   const sevenDaysAgo = moment().subtract(7, 'days').toISOString();
-//   const now = moment().toISOString();
-//   const historicalQuotes = await fetchHistoricalQuotes(tokenData.map((token) => token.id), sevenDaysAgo, now);
-  const thirtyDaysAgo = moment().subtract(20, 'days').toISOString(); // Adjusted from 7 to 30 days
-  const now = moment().toISOString();
-  const historicalQuotes = await fetchHistoricalQuotes(tokenData.map((token) => token.id), thirtyDaysAgo, now);
-  const simulationResults = [];
+async function findBestPerformingTokenAtTimestamp(exitTimestamp) {
+  // Convert exitTimestamp to a format suitable for fetchHistoricalData
+  const exitDate = moment(exitTimestamp).format('YYYY-MM-DD');
 
+  // Fetch historical data for all tokens up to the exit date
+  const historicalData = await fetchHistoricalData(exitDate);
+
+  // Filter tokens based on your initial criteria
+  const filteredTokens = filterTokens(historicalData);
+
+  // Calculate performance of each token
+  let bestToken = null;
+  let bestPerformance = -Infinity;
+
+  for (const token of filteredTokens) {
+    if (token.percent_change_24h > bestPerformance) {
+      bestPerformance = performance;
+      bestToken = token;
+    }
+  }
+
+  return bestToken;
+}
+
+async function simulateInvestmentWithReinvestment(tokenData, stopLoss = -0.10, takeProfit = 0.70) {
+  // Fetch historical quotes for the simulation period
+  const sevenDaysAgo = moment().subtract(7, 'days').toISOString();
+  const now = moment().toISOString();
+  const historicalQuotes = await fetchHistoricalQuotes(tokenData.map((token) => token.id), sevenDaysAgo, now);
+
+  const simulationResults = [];
+  const reinvestmentOpportunities = [];
+
+  // Initial simulation to determine performance and stop-loss exits
   for (const token of tokenData) {
     const quotes = historicalQuotes[token.id].quotes;
     let investmentValue = 100; // Initial investment
     let exitTriggered = false;
-    let exitTimestamp = null; // Variable to store the exit timestamp
-    console.log(`Invested in ${token.symbol} (${token.name}) at ${quotes[0].timestamp} with initial value: $100`);
+    let exitTimestamp = null;
 
     for (let i = 1; i < quotes.length; i++) {
       const previousPrice = quotes[i - 1].quote.USD.price;
       const currentPrice = quotes[i].quote.USD.price;
       const priceChange = (currentPrice - previousPrice) / previousPrice;
 
-      //   if (priceChange <= stopLoss || priceChange >= takeProfit) {
-      //     console.log('I\'ve exited');
-      //     console.log('Price change is: ', priceChange);
-      //     exitTriggered = true;
-      //     const unitsBought = 100 / quotes[0].quote.USD.price;
-      //     investmentValue = unitsBought * currentPrice;
-      //     break; // Exit the investment
-      //   }
-      if (priceChange >= takeProfit) {
+      if (priceChange <= stopLoss || priceChange >= takeProfit) {
         exitTriggered = true;
-        exitTimestamp = quotes[i].timestamp; // Store the exit timestamp
+        exitTimestamp = quotes[i].timestamp;
         const unitsBought = 100 / quotes[0].quote.USD.price;
         investmentValue = unitsBought * currentPrice;
-        console.log(`Exited ${token.symbol} (${token.name}) at ${exitTimestamp} with final value: $${investmentValue.toFixed(2)} due to ${priceChange >= takeProfit ? 'take-profit' : 'stop-loss'}`);
-        break; // Exit the investment
+        reinvestmentOpportunities.push({exitTimestamp: exitTimestamp, value: investmentValue});
+        console.log(`Exited at timestamp: ${exitTimestamp}`); // Log the exit timestamp
+        break;
       }
     }
 
-    simulationResults.push({id: token.id, exitTriggered, finalValue: investmentValue});
+    simulationResults.push({id: token.id, finalValue: investmentValue, exitTriggered, exitTimestamp: exitTimestamp});
   }
 
+  // Identify the best-performing token at each exit point and simulate reinvestment
+  for (const opportunity of reinvestmentOpportunities) {
+    const bestPerformingToken = await findBestPerformingTokenAtTimestamp(opportunity.exitTimestamp);
+    console.log('Best performing token is: ', bestPerformingToken);
+    // Simulate reinvestment into the best-performing token
+    // This requires adjusting the finalValue of the bestPerformingToken based on the reinvestment
+  }
+
+  // Final calculation of the portfolio value
+  //   const totalPortfolioValue = simulationResults.reduce((acc, curr) => acc + curr.finalValue, 0);
+
+  //   return totalPortfolioValue;
   return simulationResults;
 }
 
 // Main function to backtest the strategy
 async function backtestStrategy() {
-//   const sevenDaysAgo = moment().subtract(7, 'days').format('YYYY-MM-DD');
-//   const historicalData = await fetchHistoricalData(sevenDaysAgo);
-  const thirtyDaysAgo = moment().subtract(20, 'days').format('YYYY-MM-DD'); // Adjusted from 7 to 30 days
-  const historicalData = await fetchHistoricalData(thirtyDaysAgo);
+  const sevenDaysAgo = moment().subtract(7, 'days').format('YYYY-MM-DD');
+  const historicalData = await fetchHistoricalData(sevenDaysAgo);
   const tokenData = filterTokens(historicalData);
   const tokenCount = tokenData.length;
 
   const ids = tokenData.map((token) => token.id);
   const currentData = await fetchCurrentDataByIds(ids);
-  const simulationResults = await simulateInvestmentWithStopLossAndTakeProfit(tokenData);
+  const simulationResults = await simulateInvestmentWithReinvestment(tokenData);
 
   let totalPortfolioValue = 0;
 
@@ -173,7 +198,6 @@ async function backtestStrategy() {
       const currentPrice = currentTokenData ? currentTokenData.quote : 0;
       const unitsBought = 100 / token.historicalPrice;
       const valueNow = unitsBought * currentPrice;
-      console.log(`Active investment in ${token.symbol} (${token.name}) with final value: $${valueNow}`);
       totalPortfolioValue += valueNow;
     }
   }
