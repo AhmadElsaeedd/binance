@@ -88,8 +88,11 @@ function filterTokens(tokens) {
     const marketCap = token.quote.USD.market_cap;
     const volume24h = token.quote.USD.volume_24h;
     const volumeMarketCapRatio = (volume24h / marketCap) * 100;
+    const priceChange24h = token.quote.USD.percent_change_24h * 100;
+    const priceChange7d = token.quote.USD.percent_change_7d * 100;
 
-    return marketCap < 1e9 && volumeMarketCapRatio > 15;
+    // Return only the tokens that have a low market cap, high volume/market cap ratio, and a price change of less than 20% in the last 24 hours
+    return marketCap < 1e9 && volumeMarketCapRatio > 15 && priceChange24h < 20 && priceChange7d < 60;
   });
 
   // Extract IDs and historical prices of the filtered tokens
@@ -104,42 +107,31 @@ function filterTokens(tokens) {
 }
 
 // Function to simulate investment with stop-loss and take-profit
-async function simulateInvestmentWithStopLossAndTakeProfit(tokenData, stopLoss = -0.10, takeProfit = 0.70) {
-//   const sevenDaysAgo = moment().subtract(7, 'days').toISOString();
-//   const now = moment().toISOString();
-//   const historicalQuotes = await fetchHistoricalQuotes(tokenData.map((token) => token.id), sevenDaysAgo, now);
-  const thirtyDaysAgo = moment().subtract(20, 'days').toISOString(); // Adjusted from 7 to 30 days
+async function simulateInvestmentWithStopLossAndTakeProfit(tokenData, stopLoss, takeProfit, investmentPerToken) {
+  const sevenDaysAgo = moment().subtract(7, 'days').toISOString();
   const now = moment().toISOString();
-  const historicalQuotes = await fetchHistoricalQuotes(tokenData.map((token) => token.id), thirtyDaysAgo, now);
+  const historicalQuotes = await fetchHistoricalQuotes(tokenData.map((token) => token.id), sevenDaysAgo, now);
   const simulationResults = [];
 
   for (const token of tokenData) {
     const quotes = historicalQuotes[token.id].quotes;
-    let investmentValue = 100; // Initial investment
+    let investmentValue = investmentPerToken; // Use the calculated investment per token
     let exitTriggered = false;
-    let exitTimestamp = null; // Variable to store the exit timestamp
-    console.log(`Invested in ${token.symbol} (${token.name}) at ${quotes[0].timestamp} with initial value: $100`);
+    let exitTimestamp = null;
+    console.log(`Invested in ${token.symbol} (${token.name}) at ${quotes[0].timestamp} with initial value: $${investmentValue.toFixed(2)}`);
 
     for (let i = 1; i < quotes.length; i++) {
       const previousPrice = quotes[i - 1].quote.USD.price;
       const currentPrice = quotes[i].quote.USD.price;
       const priceChange = (currentPrice - previousPrice) / previousPrice;
 
-      //   if (priceChange <= stopLoss || priceChange >= takeProfit) {
-      //     console.log('I\'ve exited');
-      //     console.log('Price change is: ', priceChange);
-      //     exitTriggered = true;
-      //     const unitsBought = 100 / quotes[0].quote.USD.price;
-      //     investmentValue = unitsBought * currentPrice;
-      //     break; // Exit the investment
-      //   }
       if (priceChange >= takeProfit) {
         exitTriggered = true;
-        exitTimestamp = quotes[i].timestamp; // Store the exit timestamp
-        const unitsBought = 100 / quotes[0].quote.USD.price;
+        exitTimestamp = quotes[i].timestamp;
+        const unitsBought = investmentPerToken / quotes[0].quote.USD.price;
         investmentValue = unitsBought * currentPrice;
         console.log(`Exited ${token.symbol} (${token.name}) at ${exitTimestamp} with final value: $${investmentValue.toFixed(2)} due to ${priceChange >= takeProfit ? 'take-profit' : 'stop-loss'}`);
-        break; // Exit the investment
+        break;
       }
     }
 
@@ -151,16 +143,20 @@ async function simulateInvestmentWithStopLossAndTakeProfit(tokenData, stopLoss =
 
 // Main function to backtest the strategy
 async function backtestStrategy() {
-//   const sevenDaysAgo = moment().subtract(7, 'days').format('YYYY-MM-DD');
-//   const historicalData = await fetchHistoricalData(sevenDaysAgo);
-  const thirtyDaysAgo = moment().subtract(20, 'days').format('YYYY-MM-DD'); // Adjusted from 7 to 30 days
-  const historicalData = await fetchHistoricalData(thirtyDaysAgo);
+  const totalInvestment = 1000; // Starting with $1,000
+  const sevenDaysAgo = moment().subtract(7, 'days').format('YYYY-MM-DD');
+  const historicalData = await fetchHistoricalData(sevenDaysAgo);
   const tokenData = filterTokens(historicalData);
   const tokenCount = tokenData.length;
 
+  // Calculate investment per token
+  const investmentPerToken = totalInvestment / tokenCount;
+  console.log('Investment per token: ', investmentPerToken);
+
   const ids = tokenData.map((token) => token.id);
   const currentData = await fetchCurrentDataByIds(ids);
-  const simulationResults = await simulateInvestmentWithStopLossAndTakeProfit(tokenData);
+  // Pass investmentPerToken to the simulation function
+  const simulationResults = await simulateInvestmentWithStopLossAndTakeProfit(tokenData, -0.10, 0.70, investmentPerToken);
 
   let totalPortfolioValue = 0;
 
@@ -171,7 +167,7 @@ async function backtestStrategy() {
       const token = tokenData.find((t) => t.id === result.id);
       const currentTokenData = currentData.find((t) => t.id === result.id);
       const currentPrice = currentTokenData ? currentTokenData.quote : 0;
-      const unitsBought = 100 / token.historicalPrice;
+      const unitsBought = investmentPerToken / token.historicalPrice;
       const valueNow = unitsBought * currentPrice;
       console.log(`Active investment in ${token.symbol} (${token.name}) with final value: $${valueNow}`);
       totalPortfolioValue += valueNow;
@@ -179,7 +175,7 @@ async function backtestStrategy() {
   }
 
   console.log(`Total portfolio value: $${totalPortfolioValue.toFixed(2)}`);
-  const initialValue = tokenCount*100;
+  const initialValue = totalInvestment; // Use the total investment as the initial value
   console.log(`Initial portfolio value:  $${initialValue.toFixed(2)}`);
   const percentageGainOrLoss = (totalPortfolioValue - initialValue) / initialValue;
   console.log('Percentage gain or loss: ', percentageGainOrLoss);
